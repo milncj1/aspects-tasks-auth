@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src https://esm.sh 'unsafe-inline'; connect-src https://uepslltmphlkhhoorpqp.supabase.co; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
+  <title>Connect Aspects Tasks</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 20px; background: #0f172a; color: #f8fafc; }
+    main { width: min(100%, 460px); background: #111827; border: 1px solid #334155; border-radius: 18px; padding: 28px; box-shadow: 0 22px 60px rgba(0,0,0,.32); }
+    h1 { margin: 0 0 8px; font-size: 1.55rem; }
+    p { color: #cbd5e1; line-height: 1.5; }
+    label { display: block; margin-top: 18px; font-size: .9rem; color: #cbd5e1; }
+    input { width: 100%; margin-top: 7px; padding: 12px; border-radius: 10px; border: 1px solid #475569; background: #020617; color: #fff; font: inherit; }
+    button { border: 0; border-radius: 10px; padding: 12px 15px; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .primary { width: 100%; margin-top: 16px; background: #f8fafc; color: #0f172a; }
+    .actions { display: flex; gap: 10px; margin-top: 20px; }
+    .actions button { flex: 1; }
+    .approve { background: #f8fafc; color: #0f172a; }
+    .deny { background: #334155; color: #f8fafc; }
+    .card { margin-top: 18px; padding: 15px; background: #020617; border: 1px solid #1e293b; border-radius: 12px; }
+    .muted { font-size: .86rem; color: #94a3b8; }
+    .error { color: #fca5a5; white-space: pre-wrap; }
+    .hidden { display: none !important; }
+    ul { padding-left: 20px; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Connect Aspects Tasks</h1>
+  <p>Connect ChatGPT to the same Control Centre account that stores your work tasks.</p>
+
+  <section id="login">
+    <label>
+      Control Centre email
+      <input id="email" type="email" autocomplete="email" inputmode="email" />
+    </label>
+    <button id="sendLink" class="primary">Email me a secure sign-in link</button>
+    <p class="muted">No password is entered on this page.</p>
+  </section>
+
+  <section id="sent" class="hidden">
+    <div class="card">
+      <strong>Check your email</strong>
+      <p>Open the Supabase sign-in link. You will return here to approve the ChatGPT connection.</p>
+    </div>
+  </section>
+
+  <section id="consent" class="hidden">
+    <div class="card">
+      <strong id="clientName">ChatGPT</strong>
+      <p>is asking to connect to your Control Centre account.</p>
+      <div id="scopesWrap" class="hidden">
+        <div class="muted">Requested account information</div>
+        <ul id="scopes"></ul>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="deny" class="deny">Deny</button>
+      <button id="approve" class="approve">Approve</button>
+    </div>
+  </section>
+
+  <p id="status" class="muted"></p>
+  <p id="error" class="error"></p>
+</main>
+
+<script type="module">
+  import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.117.1'
+
+  const SUPABASE_URL = 'https://uepslltmphlkhhoorpqp.supabase.co'
+  const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_bnHDZwQ4e6OAx1_ToDSuSQ_kxFDWC7e'
+  const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+
+  const params = new URLSearchParams(location.search)
+  const incomingAuthorizationId = params.get('authorization_id')
+  if (incomingAuthorizationId) {
+    localStorage.setItem('aspects_tasks_authorization_id', incomingAuthorizationId)
+  }
+  const authorizationId =
+    incomingAuthorizationId ||
+    localStorage.getItem('aspects_tasks_authorization_id')
+
+  const login = document.getElementById('login')
+  const sent = document.getElementById('sent')
+  const consent = document.getElementById('consent')
+  const statusEl = document.getElementById('status')
+  const errorEl = document.getElementById('error')
+  const sendLink = document.getElementById('sendLink')
+  const approve = document.getElementById('approve')
+  const deny = document.getElementById('deny')
+
+  const setError = (message = '') => { errorEl.textContent = message }
+  const setBusy = (busy) => {
+    sendLink.disabled = busy
+    approve.disabled = busy
+    deny.disabled = busy
+  }
+
+  async function loadAuthorization() {
+    setError('')
+
+    if (!authorizationId) {
+      login.classList.add('hidden')
+      sent.classList.add('hidden')
+      consent.classList.add('hidden')
+      statusEl.textContent = 'Start the connection from ChatGPT to continue.'
+      return
+    }
+
+    const { data: userData } = await supabase.auth.getUser()
+    if (!userData?.user) {
+      login.classList.remove('hidden')
+      sent.classList.add('hidden')
+      consent.classList.add('hidden')
+      statusEl.textContent = 'Sign in to your Control Centre account.'
+      return
+    }
+
+    const { data, error } =
+      await supabase.auth.oauth.getAuthorizationDetails(authorizationId)
+
+    if (error || !data) {
+      setError(error?.message || 'This connection request is no longer valid.')
+      statusEl.textContent = ''
+      return
+    }
+
+    if (!('authorization_id' in data) && data.redirect_url) {
+      localStorage.removeItem('aspects_tasks_authorization_id')
+      location.assign(data.redirect_url)
+      return
+    }
+
+    login.classList.add('hidden')
+    sent.classList.add('hidden')
+    consent.classList.remove('hidden')
+    statusEl.textContent =
+      'Signed in as ' + (userData.user.email || 'Control Centre user')
+
+    document.getElementById('clientName').textContent =
+      data.client?.name || 'ChatGPT'
+
+    const scopes = String(data.scope || '').split(' ').filter(Boolean)
+    if (scopes.length) {
+      document.getElementById('scopesWrap').classList.remove('hidden')
+      document.getElementById('scopes').replaceChildren(
+        ...scopes.map((scope) => {
+          const li = document.createElement('li')
+          li.textContent = scope
+          return li
+        }),
+      )
+    }
+  }
+
+  sendLink.addEventListener('click', async () => {
+    setError('')
+    const email = document.getElementById('email').value.trim()
+    if (!email) {
+      setError('Enter your Control Centre email address.')
+      return
+    }
+
+    setBusy(true)
+    statusEl.textContent = 'Sending secure sign-in link...'
+    const returnUrl = location.origin + location.pathname
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: returnUrl,
+      },
+    })
+
+    setBusy(false)
+
+    if (error) {
+      statusEl.textContent = ''
+      setError(error.message)
+      return
+    }
+
+    login.classList.add('hidden')
+    sent.classList.remove('hidden')
+    statusEl.textContent = ''
+  })
+
+  approve.addEventListener('click', async () => {
+    setError('')
+    setBusy(true)
+    statusEl.textContent = 'Connecting...'
+
+    const { data, error } =
+      await supabase.auth.oauth.approveAuthorization(authorizationId)
+
+    setBusy(false)
+
+    if (error || !data?.redirect_url) {
+      statusEl.textContent = ''
+      setError(error?.message || 'Could not approve this connection.')
+      return
+    }
+
+    localStorage.removeItem('aspects_tasks_authorization_id')
+    location.assign(data.redirect_url)
+  })
+
+  deny.addEventListener('click', async () => {
+    setError('')
+    setBusy(true)
+
+    const { data, error } =
+      await supabase.auth.oauth.denyAuthorization(authorizationId)
+
+    setBusy(false)
+
+    if (error || !data?.redirect_url) {
+      setError(error?.message || 'Could not deny this connection.')
+      return
+    }
+
+    localStorage.removeItem('aspects_tasks_authorization_id')
+    location.assign(data.redirect_url)
+  })
+
+  await loadAuthorization()
+</script>
+</body>
+</html>
